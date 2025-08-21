@@ -8,13 +8,27 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+// WorkflowParams contains all the parameters needed for the BLSReleaseSummaryWorkflow
+type WorkflowParams struct {
+	Mins float64 `json:"mins"`
+	// OpenAI configuration
+	OpenAIAPIKey  string `json:"openai_api_key"`
+	OpenAIBaseURL string `json:"openai_base_url"`
+	OpenAIModel   string `json:"openai_model"`
+	// Twitter credentials
+	TwitterAPIKey       string `json:"twitter_api_key"`
+	TwitterAPISecret    string `json:"twitter_api_secret"`
+	TwitterAccessToken  string `json:"twitter_access_token"`
+	TwitterAccessSecret string `json:"twitter_access_token_secret"`
+}
+
 // TweetResponse represents the expected response from the LLM
 type TweetResponse struct {
 	Tweet string `json:"tweet" jsonschema:"required,description=A single tweet summarizing the BLS release,minLength=1,maxLength=280"`
 }
 
 // BLSReleaseSummaryWorkflow is a workflow that generates BLS release summaries
-func BLSReleaseSummaryWorkflow(ctx workflow.Context, mins float64) (string, error) {
+func BLSReleaseSummaryWorkflow(ctx workflow.Context, params WorkflowParams) (string, error) {
 	// Set workflow timeout
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 600 * time.Second,
@@ -22,7 +36,7 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, mins float64) (string, erro
 
 	// Execute FindEventsActivity to get BLS events
 	var events []gocal.Event
-	err := workflow.ExecuteActivity(ctx, FindEventsActivity, mins).Get(ctx, &events)
+	err := workflow.ExecuteActivity(ctx, FindEventsActivity, params.Mins).Get(ctx, &events)
 	if err != nil {
 		return "", fmt.Errorf("failed to find events: %w", err)
 	}
@@ -71,16 +85,10 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, mins float64) (string, erro
 			}
 			schema := reflector.Reflect(&TweetResponse{})
 
-			// Get LLM configuration from environment or use defaults
-			apiKey := os.Getenv("OPENAI_API_KEY")
-			baseURL := os.Getenv("OPENAI_BASE_URL")
-			if baseURL == "" {
-				baseURL = "https://api.openai.com/v1"
-			}
-			model := os.Getenv("OPENAI_MODEL")
-			if model == "" {
-				model = "gpt-4"
-			}
+			// Get LLM configuration from workflow params
+			apiKey := params.OpenAIAPIKey
+			baseURL := params.OpenAIBaseURL
+			model := params.OpenAIModel
 
 			systemPrompt := "You are an expert economic analyst who creates engaging single tweets about BLS (Bureau of Labor Statistics) releases. Your responses must follow the exact JSON schema provided."
 
@@ -114,7 +122,7 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, mins float64) (string, erro
 			if tweetText != "" {
 				workflow.GetLogger(ctx).Info("Posting tweet for event", "event", event.Summary, "tweetLength", len(tweetText))
 
-				err = workflow.ExecuteActivity(ctx, PostTweetActivity, tweetText).Get(ctx, nil)
+				err = workflow.ExecuteActivity(ctx, PostTweetActivity, tweetText, params.TwitterAPIKey, params.TwitterAPISecret, params.TwitterAccessToken, params.TwitterAccessSecret).Get(ctx, nil)
 				if err != nil {
 					workflow.GetLogger(ctx).Error("Failed to post tweet for event", "event", event.Summary, "tweet", tweetText, "error", err)
 					// Continue with other events even if tweeting fails

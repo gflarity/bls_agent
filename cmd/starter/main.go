@@ -3,16 +3,47 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gflarity/bls_agent/internal/config"
 	"github.com/gflarity/bls_agent/internal/workflows/bls"
+	"github.com/joho/godotenv"
 	"go.temporal.io/sdk/client"
 )
 
 func main() {
+	// Load environment variables from .env file
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Warning: Could not load .env file: %v", err)
+		// Continue execution as environment variables might be set elsewhere
+	}
+
 	// Load configuration
 	cfg := config.Load()
+
+	// Create workflow parameters with credentials from environment
+	workflowParams := bls.WorkflowParams{
+		Mins: 1440.0, // 24 hours in minutes
+		// OpenAI configuration
+		OpenAIAPIKey:  os.Getenv("OPENAI_API_KEY"),
+		OpenAIBaseURL: getEnvWithDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		OpenAIModel:   getEnvWithDefault("OPENAI_MODEL", "gpt-4"),
+		// Twitter credentials
+		TwitterAPIKey:       os.Getenv("X_API_KEY"),
+		TwitterAPISecret:    os.Getenv("X_API_SECRET"),
+		TwitterAccessToken:  os.Getenv("X_ACCESS_TOKEN"),
+		TwitterAccessSecret: os.Getenv("X_ACCESS_TOKEN_SECRET"),
+	}
+
+	// Validate required environment variables
+	if workflowParams.OpenAIAPIKey == "" {
+		log.Fatalln("OPENAI_API_KEY environment variable is required")
+	}
+	if workflowParams.TwitterAPIKey == "" || workflowParams.TwitterAPISecret == "" ||
+		workflowParams.TwitterAccessToken == "" || workflowParams.TwitterAccessSecret == "" {
+		log.Fatalln("All Twitter credentials (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET) are required")
+	}
 
 	// Create Temporal client
 	c, err := client.Dial(client.Options{
@@ -32,7 +63,7 @@ func main() {
 
 	// Start the BLS Release Summary workflow
 	log.Println("Starting BLSReleaseSummaryWorkflow...")
-	we, err := c.ExecuteWorkflow(context.Background(), workflowOptions, bls.BLSReleaseSummaryWorkflow, 1440.0)
+	we, err := c.ExecuteWorkflow(context.Background(), workflowOptions, bls.BLSReleaseSummaryWorkflow, workflowParams)
 	if err != nil {
 		log.Fatalln("Unable to execute BLSReleaseSummaryWorkflow", err)
 	}
@@ -48,4 +79,12 @@ func main() {
 
 	log.Printf("BLSReleaseSummaryWorkflow completed successfully. Result: %s\n", result)
 	log.Println("BLS Release Summary workflow completed!")
+}
+
+// getEnvWithDefault returns the environment variable value or a default if not set
+func getEnvWithDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

@@ -138,7 +138,7 @@ func ExtractSummaryActivity(ctx context.Context, html string) (string, error) {
 }
 
 // PostTweetThreadActivity posts a thread of tweets to Twitter
-func PostTweetThreadActivity(ctx context.Context, tweetTexts []string) error {
+func PostTweetThreadActivity(ctx context.Context, tweetTexts []string, twitterAPIKey, twitterAPISecret, twitterAccessToken, twitterAccessSecret string) error {
 	// Get activity info
 	activityInfo := activity.GetInfo(ctx)
 	workflowID := activityInfo.WorkflowExecution.ID
@@ -150,8 +150,8 @@ func PostTweetThreadActivity(ctx context.Context, tweetTexts []string) error {
 		"runID", runID,
 		"tweetCount", len(tweetTexts))
 
-	// Create a new Twitter client
-	client, err := twitter.NewClient()
+	// Create a new Twitter client with provided credentials
+	client, err := twitter.NewClientWithCredentials(twitterAPIKey, twitterAPISecret, twitterAccessToken, twitterAccessSecret)
 	if err != nil {
 		activity.GetLogger(ctx).Error("PostTweetThreadActivity failed to create Twitter client", "error", err)
 		return fmt.Errorf("failed to create Twitter client: %w", err)
@@ -172,7 +172,7 @@ func PostTweetThreadActivity(ctx context.Context, tweetTexts []string) error {
 }
 
 // PostTweetActivity posts a single tweet to Twitter
-func PostTweetActivity(ctx context.Context, tweetText string) error {
+func PostTweetActivity(ctx context.Context, tweetText string, twitterAPIKey, twitterAPISecret, twitterAccessToken, twitterAccessSecret string) error {
 	// Get activity info
 	activityInfo := activity.GetInfo(ctx)
 	workflowID := activityInfo.WorkflowExecution.ID
@@ -184,8 +184,8 @@ func PostTweetActivity(ctx context.Context, tweetText string) error {
 		"runID", runID,
 		"tweetLength", len(tweetText))
 
-	// Create a new Twitter client
-	client, err := twitter.NewClient()
+	// Create a new Twitter client with provided credentials
+	client, err := twitter.NewClientWithCredentials(twitterAPIKey, twitterAPISecret, twitterAccessToken, twitterAccessSecret)
 	if err != nil {
 		activity.GetLogger(ctx).Error("PostTweetActivity failed to create Twitter client", "error", err)
 		return fmt.Errorf("failed to create Twitter client: %w", err)

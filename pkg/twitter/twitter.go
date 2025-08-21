@@ -39,6 +39,16 @@ func NewClient() (*twitterClient, error) {
 		return nil, fmt.Errorf("missing required environment variables: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET")
 	}
 
+	return NewClientWithCredentials(consumerKey, consumerSecret, accessToken, accessTokenSecret)
+}
+
+// NewClientWithCredentials configures and returns a new Twitter client using
+// the provided credentials.
+func NewClientWithCredentials(consumerKey, consumerSecret, accessToken, accessTokenSecret string) (*twitterClient, error) {
+	if consumerKey == "" || consumerSecret == "" || accessToken == "" || accessTokenSecret == "" {
+		return nil, fmt.Errorf("all credentials must be provided")
+	}
+
 	// Create an OAuth1 config and token
 	config := oauth1.NewConfig(consumerKey, consumerSecret)
 	token := oauth1.NewToken(accessToken, accessTokenSecret)
