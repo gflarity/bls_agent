@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/PuloV/ics-golang"
+	ics "github.com/PuloV/ics-golang"
 )
 
 // Event represents a calendar event with the fields we need
