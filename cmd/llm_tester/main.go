@@ -36,7 +36,10 @@ func main() {
 
 	// Generate JSON schema from the Person struct
 	fmt.Println("1. Generating JSON Schema from Go Struct...")
-	schema := llm.GenerateSchemaFromType(Person{})
+	schema, err := llm.GenerateSchemaFromType(Person{})
+	if err != nil {
+		panic(fmt.Errorf("failed to generate schema from type: %w", err))
+	}
 
 	// Pretty print the generated schema
 	schemaBytes, _ := json.MarshalIndent(schema, "", "  ")

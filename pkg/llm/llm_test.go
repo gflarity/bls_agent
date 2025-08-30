@@ -17,7 +17,10 @@ type TestStruct struct {
 
 // TestGenerateSchemaFromType tests the schema generation functionality
 func TestGenerateSchemaFromType(t *testing.T) {
-	schema := GenerateSchemaFromType(TestStruct{})
+	schema, err := GenerateSchemaFromType(TestStruct{})
+	if err != nil {
+		t.Errorf("Failed to generate schema from type: %v", err)
+	}
 
 	// First, let's see what the actual schema looks like
 	t.Logf("Raw generated schema: %s", prettyJSON(schema))
@@ -63,8 +66,10 @@ func TestGenerateSchemaFromType(t *testing.T) {
 		if ageProp["type"] != "integer" {
 			t.Errorf("Expected age property type to be 'integer', got %v", ageProp["type"])
 		}
-		if ageProp["minimum"] != 0 {
-			t.Errorf("Expected age minimum to be 0, got %v", ageProp["minimum"])
+		// JSON numbers can be int or float64, so we need to handle both
+		minimum := ageProp["minimum"]
+		if minimum != 0 && minimum != 0.0 {
+			t.Errorf("Expected age minimum to be 0, got %v (type: %T)", ageProp["minimum"], ageProp["minimum"])
 		}
 	}
 
@@ -86,7 +91,10 @@ func TestGenerateSchemaFromType(t *testing.T) {
 // TestGenerateSchemaFromPointer tests schema generation from a pointer type
 func TestGenerateSchemaFromPointer(t *testing.T) {
 	var testStruct *TestStruct
-	schema := GenerateSchemaFromType(testStruct)
+	schema, err := GenerateSchemaFromType(testStruct)
+	if err != nil {
+		t.Errorf("Failed to generate schema from type: %v", err)
+	}
 
 	if schema["type"] != "object" {
 		t.Errorf("Expected schema type to be 'object', got %v", schema["type"])

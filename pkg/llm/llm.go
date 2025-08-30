@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"reflect"
 
 	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go/v2"
@@ -100,130 +99,42 @@ func CompleteWithSchema(
 	return content, reasoning, nil
 }
 
-// CompleteWithStruct performs a LLM completion with automatic JSON schema generation from a Go struct.
-// This is a convenience function that combines schema generation with completion.
-//
-// Parameters:
-//   - ctx: The context for the request.
-//   - apiKey: The API key for authenticating with the OpenAI-compatible API.
-//   - baseURL: The base URL for the API endpoint.
-//   - schemaType: A Go struct instance or type that will be used to generate the JSON schema.
-//   - systemPrompt: The base system prompt for the AI model.
-//   - userPrompt: The specific prompt provided by the user.
-//   - model: The model identifier for the API.
-//
-// Returns:
-//   - A tuple containing:
-//   - The response content as a JSON string.
-//   - An optional reasoning content string (remains empty as it's a non-standard field).
-//   - An error if the request fails.
-func CompleteWithStruct(
-	ctx context.Context,
-	apiKey string,
-	baseURL string,
-	schemaType interface{},
-	systemPrompt string,
-	userPrompt string,
-	model string,
-) (string, string, error) {
-	// Generate the schema from the Go struct
-	schema := GenerateSchemaFromType(schemaType)
-
-	// Marshal the schema map to a JSON string for CompleteWithSchema
-	schemaBytes, err := json.Marshal(schema)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal schema to JSON string: %w", err)
-	}
-	schemaStr := string(schemaBytes)
-
-	// Use the existing CompleteWithSchema function
-	return CompleteWithSchema(ctx, apiKey, baseURL, schemaStr, systemPrompt, userPrompt, model)
-}
-
 // GenerateSchemaFromType generates a JSON schema from a Go struct type using jsonschema reflector
-func GenerateSchemaFromType(schemaType interface{}) map[string]interface{} {
-	// Create a new reflector
+func GenerateSchemaFromType(schemaType interface{}) (map[string]interface{}, error) {
+	// Create a new reflector with settings optimized for OpenAI API compatibility
 	r := jsonschema.Reflector{
-		ExpandedStruct:             true,
-		DoNotReference:             false,
+		// DoNotReference: true ensures we get an inline schema instead of $ref
+		DoNotReference: true,
+		// RequiredFromJSONSchemaTags: true respects jsonschema tags for required fields
 		RequiredFromJSONSchemaTags: true,
 	}
 
-	// Get the type of the schema
-	var t reflect.Type
-	if reflect.TypeOf(schemaType).Kind() == reflect.Ptr {
-		t = reflect.TypeOf(schemaType).Elem()
-	} else {
-		t = reflect.TypeOf(schemaType)
-	}
-
-	// Generate the schema
-	schema := r.Reflect(t)
+	// Pass the actual value/pointer to Reflect(), not the reflect.Type
+	// The jsonschema.Reflector.Reflect() method expects an actual value or pointer
+	schema := r.Reflect(schemaType)
 
 	// Convert the schema to a map[string]interface{} for the OpenAI API
 	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
-		log.Printf("Failed to marshal generated schema: %v", err)
-		// Return a basic schema as fallback
-		return map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
-		}
+		return nil, fmt.Errorf("failed to marshal generated schema: %w", err)
 	}
 
 	var schemaMap map[string]interface{}
 	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
-		log.Printf("Failed to unmarshal schema to map: %v", err)
-		// Return a basic schema as fallback
-		return map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+		return nil, fmt.Errorf("failed to unmarshal schema to map: %w", err)
+	}
+
+	// By default, make all fields required unless explicitly marked as optional
+	// This is typical for OpenAI API usage where we want complete responses
+	if properties, ok := schemaMap["properties"].(map[string]interface{}); ok && len(properties) > 0 {
+		if _, hasRequired := schemaMap["required"]; !hasRequired {
+			var required []string
+			for fieldName := range properties {
+				required = append(required, fieldName)
+			}
+			schemaMap["required"] = required
 		}
 	}
 
-	// If the generated schema is too minimal, we can enhance it manually
-	if properties, ok := schemaMap["properties"].(map[string]interface{}); ok && len(properties) == 0 {
-		// Fallback to manual schema construction based on the struct
-		schemaMap = buildSchemaFromStruct(schemaType)
-	}
-
-	return schemaMap
-}
-
-// buildStruct manually builds a schema when the reflector doesn't work as expected
-func buildSchemaFromStruct(schemaType interface{}) map[string]interface{} {
-	// This is a fallback that manually constructs the schema
-	// In practice, you might want to use reflection to automatically build this
-	return map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"name": map[string]interface{}{
-				"type":        "string",
-				"description": "The name of the person",
-			},
-			"age": map[string]interface{}{
-				"type":        "integer",
-				"description": "The age of the person",
-				"minimum":     0,
-				"maximum":     150,
-			},
-			"is_student": map[string]interface{}{
-				"type":        "boolean",
-				"description": "Whether the person is a student",
-			},
-			"courses": map[string]interface{}{
-				"type":        "array",
-				"description": "List of courses the person is taking",
-				"items": map[string]interface{}{
-					"type": "string",
-				},
-			},
-			"email": map[string]interface{}{
-				"type":        "string",
-				"description": "Email address",
-				"format":      "email",
-			},
-		},
-		"required": []string{"name", "age", "is_student"},
-	}
+	return schemaMap, nil
 }
