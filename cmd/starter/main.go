@@ -24,11 +24,11 @@ func main() {
 
 	// Create workflow parameters with credentials from environment
 	workflowParams := bls.WorkflowParams{
-		Mins: 1440.0, // 24 hours in minutes
+		Mins: 7 * 1440.0, // 1440. = 24 hours in minutes
 		// OpenAI configuration
 		OpenAIAPIKey:  os.Getenv("OPENAI_API_KEY"),
-		OpenAIBaseURL: getEnvWithDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		OpenAIModel:   getEnvWithDefault("OPENAI_MODEL", "gpt-4"),
+		OpenAIBaseURL: os.Getenv("OPENAI_BASE_URL"),
+		OpenAIModel:   os.Getenv("OPENAI_MODEL"),
 		// Twitter credentials
 		TwitterAPIKey:       os.Getenv("X_API_KEY"),
 		TwitterAPISecret:    os.Getenv("X_API_SECRET"),
@@ -71,20 +71,12 @@ func main() {
 	log.Printf("Started BLSReleaseSummaryWorkflow: %s, RunID: %s\n", we.GetID(), we.GetRunID())
 
 	// Wait for workflow completion
-	var result string
-	err = we.Get(context.Background(), &result)
+	var twtsums []string
+	err = we.Get(context.Background(), &twtsums)
 	if err != nil {
 		log.Fatalln("BLSReleaseSummaryWorkflow execution failed", err)
 	}
 
-	log.Printf("BLSReleaseSummaryWorkflow completed successfully. Result: %s\n", result)
+	log.Printf("BLSReleaseSummaryWorkflow completed successfully. Result: %v\n", twtsums)
 	log.Println("BLS Release Summary workflow completed!")
-}
-
-// getEnvWithDefault returns the environment variable value or a default if not set
-func getEnvWithDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/apognu/gocal"
 	"github.com/gflarity/bls_agent/pkg/bls"
 	"github.com/gflarity/bls_agent/pkg/llm"
 	"github.com/gflarity/bls_agent/pkg/twitter"
@@ -12,7 +11,7 @@ import (
 )
 
 // FindEventsActivity finds BLS events that happened within the last specified minutes
-func FindEventsActivity(ctx context.Context, mins float64) ([]gocal.Event, error) {
+func FindEventsActivity(ctx context.Context, mins float64) ([]bls.Event, error) {
 	// Get activity info
 	activityInfo := activity.GetInfo(ctx)
 	workflowID := activityInfo.WorkflowExecution.ID
@@ -43,11 +42,11 @@ func CompleteWithSchemaActivity(
 	ctx context.Context,
 	apiKey string,
 	baseURL string,
-	schema map[string]interface{},
+	schema string,
 	systemPrompt string,
 	userPrompt string,
 	model string,
-) (string, string, error) {
+) (string, error) {
 	// Get activity info
 	activityInfo := activity.GetInfo(ctx)
 	workflowID := activityInfo.WorkflowExecution.ID
@@ -72,7 +71,7 @@ func CompleteWithSchemaActivity(
 	)
 	if err != nil {
 		activity.GetLogger(ctx).Error("CompleteWithSchemaActivity failed", "error", err)
-		return "", "", fmt.Errorf("failed to complete with schema: %w", err)
+		return "", fmt.Errorf("failed to complete with schema: %w", err)
 	}
 
 	// Log the results
@@ -80,11 +79,11 @@ func CompleteWithSchemaActivity(
 		"contentLength", len(content),
 		"reasoningLength", len(reasoning))
 
-	return content, reasoning, nil
+	return content, nil
 }
 
 // FetchReleaseHTMLActivity fetches the HTML for the release of an event
-func FetchReleaseHTMLActivity(ctx context.Context, event gocal.Event) (string, error) {
+func FetchReleaseHTMLActivity(ctx context.Context, event bls.Event) (string, error) {
 	// Get activity info
 	activityInfo := activity.GetInfo(ctx)
 	workflowID := activityInfo.WorkflowExecution.ID
