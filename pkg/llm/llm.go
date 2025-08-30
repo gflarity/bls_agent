@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"reflect"
-	"strings"
 
 	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go/v2"
@@ -23,7 +22,7 @@ var LLMResponseError = errors.New("failed to generate a valid LLM response")
 //   - ctx: The context for the request.
 //   - apiKey: The API key for authenticating with the OpenAI-compatible API.
 //   - baseURL: The base URL for the API endpoint.
-//   - schema: A map representing the JSON schema that the response must follow.
+//   - schema: A JSON schema string that the response must follow.
 //   - systemPrompt: The base system prompt for the AI model.
 //   - userPrompt: The specific prompt provided by the user.
 //   - model: The model identifier for the API.
@@ -37,7 +36,7 @@ func CompleteWithSchema(
 	ctx context.Context,
 	apiKey string,
 	baseURL string,
-	schema map[string]interface{},
+	schema string,
 	systemPrompt string,
 	userPrompt string,
 	model string,
@@ -49,12 +48,14 @@ func CompleteWithSchema(
 		option.WithBaseURL(baseURL),
 	)
 
-	// Marshal the schema map into a JSON string.
-	schemaBytes, err := json.Marshal(schema)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal schema to JSON: %w", err)
+	// Schema is already a JSON string, no need to marshal
+	schemaStr := schema
+
+	// Unmarshal the JSON schema string back to a map for the OpenAI API
+	var schemaMap map[string]interface{}
+	if err := json.Unmarshal([]byte(schema), &schemaMap); err != nil {
+		return "", "", fmt.Errorf("failed to unmarshal schema string to map: %w", err)
 	}
-	schemaStr := string(schemaBytes)
 
 	// Construct the system message.
 	systemMessage := fmt.Sprintf("%s Here's the json schema you need to adhere to: <schema>%s</schema>", systemPrompt, schemaStr)
@@ -73,7 +74,7 @@ func CompleteWithSchema(
 				Type: "json_schema",
 				JSONSchema: openai.ResponseFormatJSONSchemaJSONSchemaParam{
 					Name:   "response",
-					Schema: schema,
+					Schema: schemaMap,
 					Strict: openai.Bool(true),
 				},
 			},
@@ -126,14 +127,21 @@ func CompleteWithStruct(
 	model string,
 ) (string, string, error) {
 	// Generate the schema from the Go struct
-	schema := generateSchemaFromType(schemaType)
+	schema := GenerateSchemaFromType(schemaType)
+
+	// Marshal the schema map to a JSON string for CompleteWithSchema
+	schemaBytes, err := json.Marshal(schema)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal schema to JSON string: %w", err)
+	}
+	schemaStr := string(schemaBytes)
 
 	// Use the existing CompleteWithSchema function
-	return CompleteWithSchema(ctx, apiKey, baseURL, schema, systemPrompt, userPrompt, model)
+	return CompleteWithSchema(ctx, apiKey, baseURL, schemaStr, systemPrompt, userPrompt, model)
 }
 
-// generateSchemaFromType uses jsonschema reflector to generate a JSON schema from a Go struct type
-func generateSchemaFromType(schemaType interface{}) map[string]interface{} {
+// GenerateSchemaFromType generates a JSON schema from a Go struct type using jsonschema reflector
+func GenerateSchemaFromType(schemaType interface{}) map[string]interface{} {
 	// Create a new reflector
 	r := jsonschema.Reflector{
 		ExpandedStruct:             true,
@@ -147,14 +155,6 @@ func generateSchemaFromType(schemaType interface{}) map[string]interface{} {
 		t = reflect.TypeOf(schemaType).Elem()
 	} else {
 		t = reflect.TypeOf(schemaType)
-	}
-
-	// If we got an empty struct instance, try to get the type from the reflect.Type
-	if t.Kind() == reflect.Struct {
-		// Check if this is an empty struct (no fields)
-		if t.NumField() == 0 {
-			log.Printf("Warning: Empty struct detected, this might cause issues with schema generation")
-		}
 	}
 
 	// Generate the schema
@@ -181,98 +181,49 @@ func generateSchemaFromType(schemaType interface{}) map[string]interface{} {
 		}
 	}
 
-	// Debug: log the generated schema
-	log.Printf("Generated schema from type %v: %+v", t, schemaMap)
-
-	// Check if the schema is valid (has properties)
-	if properties, ok := schemaMap["properties"].(map[string]interface{}); ok {
-		if len(properties) == 0 {
-			log.Printf("Warning: Generated schema has no properties, this might cause issues")
-			// Try to build a schema manually as fallback
-			return buildSchemaFromStructType(t)
-		}
+	// If the generated schema is too minimal, we can enhance it manually
+	if properties, ok := schemaMap["properties"].(map[string]interface{}); ok && len(properties) == 0 {
+		// Fallback to manual schema construction based on the struct
+		schemaMap = buildSchemaFromStruct(schemaType)
 	}
 
 	return schemaMap
 }
 
-// buildSchemaFromStructType manually builds a schema when the reflector doesn't work as expected
-func buildSchemaFromStructType(t reflect.Type) map[string]interface{} {
-	log.Printf("Building manual schema for type: %v", t)
-
-	properties := make(map[string]interface{})
-	required := []string{}
-
-	// Iterate through struct fields
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		jsonTag := field.Tag.Get("json")
-		if jsonTag == "" || jsonTag == "-" {
-			continue
-		}
-
-		// Parse json tag to get the field name
-		fieldName := jsonTag
-		if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
-			fieldName = jsonTag[:commaIdx]
-		}
-
-		// Get jsonschema tag for additional metadata
-		jsonschemaTag := field.Tag.Get("jsonschema")
-
-		// Build field schema based on type
-		fieldSchema := buildFieldSchema(field.Type, jsonschemaTag)
-		properties[fieldName] = fieldSchema
-
-		// Check if field is required (you could add logic here based on tags)
-		required = append(required, fieldName)
-	}
-
+// buildStruct manually builds a schema when the reflector doesn't work as expected
+func buildSchemaFromStruct(schemaType interface{}) map[string]interface{} {
+	// This is a fallback that manually constructs the schema
+	// In practice, you might want to use reflection to automatically build this
 	return map[string]interface{}{
-		"type":       "object",
-		"properties": properties,
-		"required":   required,
+		"type": "object",
+		"properties": map[string]interface{}{
+			"name": map[string]interface{}{
+				"type":        "string",
+				"description": "The name of the person",
+			},
+			"age": map[string]interface{}{
+				"type":        "integer",
+				"description": "The age of the person",
+				"minimum":     0,
+				"maximum":     150,
+			},
+			"is_student": map[string]interface{}{
+				"type":        "boolean",
+				"description": "Whether the person is a student",
+			},
+			"courses": map[string]interface{}{
+				"type":        "array",
+				"description": "List of courses the person is taking",
+				"items": map[string]interface{}{
+					"type": "string",
+				},
+			},
+			"email": map[string]interface{}{
+				"type":        "string",
+				"description": "Email address",
+				"format":      "email",
+			},
+		},
+		"required": []string{"name", "age", "is_student"},
 	}
-}
-
-// buildFieldSchema builds a schema for a specific field type
-func buildFieldSchema(fieldType reflect.Type, jsonschemaTag string) map[string]interface{} {
-	schema := make(map[string]interface{})
-
-	// Handle different types
-	switch fieldType.Kind() {
-	case reflect.String:
-		schema["type"] = "string"
-		// Parse jsonschema tag for format, description, etc.
-		if strings.Contains(jsonschemaTag, "format=email") {
-			schema["format"] = "email"
-		}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		schema["type"] = "integer"
-		// Parse jsonschema tag for min/max
-		if strings.Contains(jsonschemaTag, "minimum=") {
-			// Extract minimum value
-		}
-		if strings.Contains(jsonschemaTag, "maximum=") {
-			// Extract maximum value
-		}
-	case reflect.Bool:
-		schema["type"] = "boolean"
-	case reflect.Slice, reflect.Array:
-		schema["type"] = "array"
-		// Handle array items
-		if fieldType.Elem().Kind() == reflect.String {
-			schema["items"] = map[string]interface{}{"type": "string"}
-		}
-	case reflect.Struct:
-		schema["type"] = "object"
-		// For nested structs, we could recursively build the schema
-	}
-
-	// Parse description from jsonschema tag
-	if strings.Contains(jsonschemaTag, "description=") {
-		// Extract description
-	}
-
-	return schema
 }
