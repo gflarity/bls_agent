@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
+	"reflect"
+	"strings"
 
+	"github.com/invopop/jsonschema"
 	"github.com/openai/openai-go/v2"
 	"github.com/openai/openai-go/v2/option"
 )
@@ -97,63 +99,180 @@ func CompleteWithSchema(
 	return content, reasoning, nil
 }
 
-// main function to demonstrate the usage of CompleteWithSchema.
-func main() {
-	// It's best practice to load the API key from an environment variable.
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		log.Fatal("Error: OPENAI_API_KEY environment variable not set.")
+// CompleteWithStruct performs a LLM completion with automatic JSON schema generation from a Go struct.
+// This is a convenience function that combines schema generation with completion.
+//
+// Parameters:
+//   - ctx: The context for the request.
+//   - apiKey: The API key for authenticating with the OpenAI-compatible API.
+//   - baseURL: The base URL for the API endpoint.
+//   - schemaType: A Go struct instance or type that will be used to generate the JSON schema.
+//   - systemPrompt: The base system prompt for the AI model.
+//   - userPrompt: The specific prompt provided by the user.
+//   - model: The model identifier for the API.
+//
+// Returns:
+//   - A tuple containing:
+//   - The response content as a JSON string.
+//   - An optional reasoning content string (remains empty as it's a non-standard field).
+//   - An error if the request fails.
+func CompleteWithStruct(
+	ctx context.Context,
+	apiKey string,
+	baseURL string,
+	schemaType interface{},
+	systemPrompt string,
+	userPrompt string,
+	model string,
+) (string, string, error) {
+	// Generate the schema from the Go struct
+	schema := generateSchemaFromType(schemaType)
+
+	// Use the existing CompleteWithSchema function
+	return CompleteWithSchema(ctx, apiKey, baseURL, schema, systemPrompt, userPrompt, model)
+}
+
+// generateSchemaFromType uses jsonschema reflector to generate a JSON schema from a Go struct type
+func generateSchemaFromType(schemaType interface{}) map[string]interface{} {
+	// Create a new reflector
+	r := jsonschema.Reflector{
+		ExpandedStruct:             true,
+		DoNotReference:             false,
+		RequiredFromJSONSchemaTags: true,
 	}
 
-	// Define a sample schema for the request.
-	sampleSchema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"name":       map[string]interface{}{"type": "string", "description": "The name of the person."},
-			"age":        map[string]interface{}{"type": "integer", "description": "The age of the person."},
-			"is_student": map[string]interface{}{"type": "boolean", "description": "Whether the person is a student."},
-			"courses":    map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
-		},
-		"required": []string{"name", "age", "is_student"},
+	// Get the type of the schema
+	var t reflect.Type
+	if reflect.TypeOf(schemaType).Kind() == reflect.Ptr {
+		t = reflect.TypeOf(schemaType).Elem()
+	} else {
+		t = reflect.TypeOf(schemaType)
 	}
 
-	// Call the function with sample data.
-	content, reasoning, err := CompleteWithSchema(
-		context.Background(),
-		apiKey,
-		"https://api.openai.com/v1", // <-- IMPORTANT: Change this to your CentML or other custom base URL if needed.
-		sampleSchema,
-		"You are a helpful assistant that extracts information and returns it in JSON format.",
-		"Extract the following information: John Doe is 30 years old, not a student, and is taking 'History' and 'Math'.",
-		openai.ChatModelGPT4o, // Using a standard model constant from the official library.
-	)
+	// If we got an empty struct instance, try to get the type from the reflect.Type
+	if t.Kind() == reflect.Struct {
+		// Check if this is an empty struct (no fields)
+		if t.NumField() == 0 {
+			log.Printf("Warning: Empty struct detected, this might cause issues with schema generation")
+		}
+	}
 
+	// Generate the schema
+	schema := r.Reflect(t)
+
+	// Convert the schema to a map[string]interface{} for the OpenAI API
+	schemaBytes, err := json.Marshal(schema)
 	if err != nil {
-		log.Fatalf("Function call failed: %v", err)
+		log.Printf("Failed to marshal generated schema: %v", err)
+		// Return a basic schema as fallback
+		return map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		}
 	}
 
-	// Print the results.
-	fmt.Println("--- LLM Response ---")
-	fmt.Println(content)
-	fmt.Println("\n--- Reasoning ---")
-	fmt.Printf("'%s' (Note: This is often empty as it's a non-standard field)\n", reasoning)
-
-	// You can also unmarshal the JSON string into a Go struct for further processing.
-	type Person struct {
-		Name      string   `json:"name"`
-		Age       int      `json:"age"`
-		IsStudent bool     `json:"is_student"`
-		Courses   []string `json:"courses"`
+	var schemaMap map[string]interface{}
+	if err := json.Unmarshal(schemaBytes, &schemaMap); err != nil {
+		log.Printf("Failed to unmarshal schema to map: %v", err)
+		// Return a basic schema as fallback
+		return map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		}
 	}
 
-	var personData Person
-	if err := json.Unmarshal([]byte(content), &personData); err != nil {
-		log.Fatalf("Failed to unmarshal response content: %v", err)
+	// Debug: log the generated schema
+	log.Printf("Generated schema from type %v: %+v", t, schemaMap)
+
+	// Check if the schema is valid (has properties)
+	if properties, ok := schemaMap["properties"].(map[string]interface{}); ok {
+		if len(properties) == 0 {
+			log.Printf("Warning: Generated schema has no properties, this might cause issues")
+			// Try to build a schema manually as fallback
+			return buildSchemaFromStructType(t)
+		}
 	}
 
-	fmt.Println("\n--- Parsed Data ---")
-	fmt.Printf("Name: %s\n", personData.Name)
-	fmt.Printf("Age: %d\n", personData.Age)
-	fmt.Printf("Is Student: %t\n", personData.IsStudent)
-	fmt.Printf("Courses: %v\n", personData.Courses)
+	return schemaMap
+}
+
+// buildSchemaFromStructType manually builds a schema when the reflector doesn't work as expected
+func buildSchemaFromStructType(t reflect.Type) map[string]interface{} {
+	log.Printf("Building manual schema for type: %v", t)
+
+	properties := make(map[string]interface{})
+	required := []string{}
+
+	// Iterate through struct fields
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		jsonTag := field.Tag.Get("json")
+		if jsonTag == "" || jsonTag == "-" {
+			continue
+		}
+
+		// Parse json tag to get the field name
+		fieldName := jsonTag
+		if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
+			fieldName = jsonTag[:commaIdx]
+		}
+
+		// Get jsonschema tag for additional metadata
+		jsonschemaTag := field.Tag.Get("jsonschema")
+
+		// Build field schema based on type
+		fieldSchema := buildFieldSchema(field.Type, jsonschemaTag)
+		properties[fieldName] = fieldSchema
+
+		// Check if field is required (you could add logic here based on tags)
+		required = append(required, fieldName)
+	}
+
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+		"required":   required,
+	}
+}
+
+// buildFieldSchema builds a schema for a specific field type
+func buildFieldSchema(fieldType reflect.Type, jsonschemaTag string) map[string]interface{} {
+	schema := make(map[string]interface{})
+
+	// Handle different types
+	switch fieldType.Kind() {
+	case reflect.String:
+		schema["type"] = "string"
+		// Parse jsonschema tag for format, description, etc.
+		if strings.Contains(jsonschemaTag, "format=email") {
+			schema["format"] = "email"
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		schema["type"] = "integer"
+		// Parse jsonschema tag for min/max
+		if strings.Contains(jsonschemaTag, "minimum=") {
+			// Extract minimum value
+		}
+		if strings.Contains(jsonschemaTag, "maximum=") {
+			// Extract maximum value
+		}
+	case reflect.Bool:
+		schema["type"] = "boolean"
+	case reflect.Slice, reflect.Array:
+		schema["type"] = "array"
+		// Handle array items
+		if fieldType.Elem().Kind() == reflect.String {
+			schema["items"] = map[string]interface{}{"type": "string"}
+		}
+	case reflect.Struct:
+		schema["type"] = "object"
+		// For nested structs, we could recursively build the schema
+	}
+
+	// Parse description from jsonschema tag
+	if strings.Contains(jsonschemaTag, "description=") {
+		// Extract description
+	}
+
+	return schema
 }
