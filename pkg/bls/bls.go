@@ -2,6 +2,8 @@ package bls
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -112,47 +114,21 @@ func GetAllEvents() ([]Event, error) {
 	}
 	bodyStr := string(bodyBytes)
 
+	fmt.Println("bodyStr length: ", len(bodyStr))
+	sha := sha256.New()
+	sha.Write([]byte(bodyStr))
+	fmt.Println("sha: ", hex.EncodeToString(sha.Sum(nil)))
+
 	if !strings.Contains(bodyStr, "BEGIN:VCALENDAR") {
 		return nil, fmt.Errorf("response does not appear to be valid ICS calendar data")
 	}
 
-	var cleanedLines []string
-	for _, line := range strings.Split(bodyStr, "\n") {
-		if strings.TrimSpace(line) != "" {
-			cleanedLines = append(cleanedLines, line)
-		}
-	}
-	cleanedBody := strings.Join(cleanedLines, "\n")
-
-	// TODO clean up code is suspect, need to improve it
-	var processedLines []string
-	lines := strings.Split(cleanedBody, "\n")
-	inEvent := false
-	hasDtstamp := false
-	for _, line := range lines {
-		processedLines = append(processedLines, line)
-		if strings.TrimSpace(line) == "BEGIN:VEVENT" {
-			inEvent = true
-			hasDtstamp = false
-		} else if strings.TrimSpace(line) == "END:VEVENT" {
-			inEvent = false
-		} else if inEvent && strings.HasPrefix(strings.TrimSpace(line), "DTSTAMP:") {
-			hasDtstamp = true
-		} else if inEvent && strings.HasPrefix(strings.TrimSpace(line), "SUMMARY:") && !hasDtstamp {
-			dtstamp := fmt.Sprintf("DTSTAMP:%s", time.Now().UTC().Format("20060102T150405Z"))
-			processedLines = append(processedLines[:len(processedLines)-1], dtstamp, line)
-			hasDtstamp = true
-		}
-	}
-	bodyStr = strings.Join(processedLines, "\n")
-
 	// --- FIX: Replace non-standard timezone with IANA standard ---
 	// The BLS calendar uses "US-Eastern", which Go's time package cannot parse.
 	// We replace it with the official IANA name "America/New_York".
+	// Replace all occurrences of US-Eastern timezone references
 	bodyStr = strings.ReplaceAll(bodyStr, "TZID=US-Eastern", "TZID=America/New_York")
-
-	// TODO there's still US-Eastern in the bodyStr without the prefix... it's causing issues
-	// with the parser.
+	bodyStr = strings.ReplaceAll(bodyStr, "X-WR-TIMEZONE:US-Eastern", "X-WR-TIMEZONE:America/New_York")
 
 	// --- REVISED PARSING LOGIC ---
 	parser := ics.New()
@@ -162,15 +138,26 @@ func GetAllEvents() ([]Event, error) {
 	outputChan := parser.GetOutputChan()
 
 	var icsEvents []*ics.Event
-	// This goroutine will read events from the channel and add them to our slice.
+
+	// Use a goroutine to collect events with a timeout to prevent hanging
+	done := make(chan bool)
 	go func() {
 		for event := range outputChan {
 			icsEvents = append(icsEvents, event)
 		}
+		done <- true
 	}()
 
-	// parser.Wait() blocks until the parsing is complete and the output channel is closed.
-	parser.Wait()
+	// Wait for either completion or timeout
+	// TODO this is pretty sketchy, need to improve it, maybe use gocal again
+	// might be related to the cleaning up of the bodyStr
+	select {
+	case <-done:
+		// Events collected successfully
+	case <-time.After(2 * time.Second):
+		// Timeout after 10 seconds
+		log.Println("Warning: Parser timeout reached, proceeding with collected events")
+	}
 
 	// After waiting, check if the parser encountered any errors.
 	parserErrors, _ := parser.GetErrors()
