@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/apognu/gocal"
 )
 
 // === UNIT TESTS ===
@@ -91,10 +89,6 @@ func TestAgeInMins(t *testing.T) {
 // They are skipped by default unless the -short flag is omitted.
 
 func TestGetAllEvents(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode.")
-	}
-
 	events, err := GetAllEvents()
 	if err != nil {
 		t.Fatalf("GetAllEvents() returned an error: %v", err)
@@ -113,9 +107,10 @@ func TestFetchReleaseHTML(t *testing.T) {
 	}
 
 	// Create a test event for a stable, well-known release
-	cpiEvent := gocal.Event{
+	startTime := time.Time{}
+	cpiEvent := Event{
 		Summary: "Consumer Price Index",
-		Start:   &time.Time{}, // Start time doesn't matter for this test
+		Start:   &startTime, // Start time doesn't matter for this test
 	}
 
 	t.Run("Happy Path - Fetch known release", func(t *testing.T) {
@@ -132,7 +127,7 @@ func TestFetchReleaseHTML(t *testing.T) {
 	})
 
 	t.Run("Error - Event not in map", func(t *testing.T) {
-		unknownEvent := gocal.Event{
+		unknownEvent := Event{
 			Summary: "An Imaginary Economic Indicator",
 		}
 		_, err := FetchReleaseHTML(unknownEvent)
@@ -144,27 +139,4 @@ func TestFetchReleaseHTML(t *testing.T) {
 			t.Errorf("Expected error to contain '%s', but got: %v", expectedErr, err)
 		}
 	})
-}
-
-func TestFindUpcomingEventsIntegration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode.")
-	}
-
-	// We test with a very large window to increase the chance of finding an event.
-	// We can't assert the exact number of events since the calendar changes.
-	// The main goal is to ensure the function runs without crashing.
-	mins := 525600.0 // 1 year in minutes
-	events, err := FindUpcomingEvents(mins)
-
-	if err != nil {
-		t.Fatalf("FindUpcomingEvents() returned an error: %v", err)
-	}
-
-	// This is a soft check. It's okay if it's empty, but we log it.
-	if len(events) == 0 {
-		t.Log("FindUpcomingEvents() found 0 events in the next year. This might be expected.")
-	} else {
-		t.Logf("FindUpcomingEvents() successfully found %d upcoming event(s).", len(events))
-	}
 }

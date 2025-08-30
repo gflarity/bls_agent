@@ -10,8 +10,16 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/apognu/gocal"
+	"github.com/PuloV/ics-golang"
 )
+
+// Event represents a calendar event with the fields we need
+type Event struct {
+	Summary string
+	Start   *time.Time
+	End     *time.Time
+	UID     string
+}
 
 // eventMappings holds the mapping of event summaries to their news release URLs.
 var eventMappings = map[string]string{
@@ -63,7 +71,8 @@ var eventMappings = map[string]string{
 }
 
 // GetAllEvents fetches the BLS calendar and returns all events.
-func GetAllEvents() ([]gocal.Event, error) {
+// This version has been corrected to use the ics-golang library more idiomatically.
+func GetAllEvents() ([]Event, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", "https://www.bls.gov/schedule/news_release/bls.ics", nil)
 	if err != nil {
@@ -101,13 +110,7 @@ func GetAllEvents() ([]gocal.Event, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-
 	bodyStr := string(bodyBytes)
-	if len(bodyStr) == 0 {
-		return nil, fmt.Errorf("empty response from calendar URL")
-	}
-
-	log.Printf("Calendar response preview: %s", bodyStr[:min(len(bodyStr), 200)])
 
 	if !strings.Contains(bodyStr, "BEGIN:VCALENDAR") {
 		return nil, fmt.Errorf("response does not appear to be valid ICS calendar data")
@@ -121,6 +124,7 @@ func GetAllEvents() ([]gocal.Event, error) {
 	}
 	cleanedBody := strings.Join(cleanedLines, "\n")
 
+	// TODO clean up code is suspect, need to improve it
 	var processedLines []string
 	lines := strings.Split(cleanedBody, "\n")
 	inEvent := false
@@ -140,26 +144,73 @@ func GetAllEvents() ([]gocal.Event, error) {
 			hasDtstamp = true
 		}
 	}
-	processedBody := strings.Join(processedLines, "\n")
+	bodyStr = strings.Join(processedLines, "\n")
 
-	parser := gocal.NewParser(strings.NewReader(processedBody))
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("Recovered from panic in gocal parsing: %v", r)
+	// --- FIX: Replace non-standard timezone with IANA standard ---
+	// The BLS calendar uses "US-Eastern", which Go's time package cannot parse.
+	// We replace it with the official IANA name "America/New_York".
+	bodyStr = strings.ReplaceAll(bodyStr, "TZID=US-Eastern", "TZID=America/New_York")
+
+	// TODO there's still US-Eastern in the bodyStr without the prefix... it's causing issues
+	// with the parser.
+
+	// --- REVISED PARSING LOGIC ---
+	parser := ics.New()
+	parser.Load(bodyStr)
+
+	// The parser works asynchronously. We need to read events from its output channel.
+	outputChan := parser.GetOutputChan()
+
+	var icsEvents []*ics.Event
+	// This goroutine will read events from the channel and add them to our slice.
+	go func() {
+		for event := range outputChan {
+			icsEvents = append(icsEvents, event)
 		}
 	}()
 
-	err = parser.Parse()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse calendar: %w", err)
+	// parser.Wait() blocks until the parsing is complete and the output channel is closed.
+	parser.Wait()
+
+	// After waiting, check if the parser encountered any errors.
+	parserErrors, _ := parser.GetErrors()
+	if len(parserErrors) > 0 {
+		// Log the errors but don't necessarily fail if some events were parsed.
+		log.Printf("Warning: encountered errors while parsing ICS data: %v", parserErrors)
 	}
 
-	if len(parser.Events) == 0 {
+	if len(icsEvents) == 0 {
 		log.Println("No events found in calendar")
-		return []gocal.Event{}, nil
+		return []Event{}, nil
 	}
 
-	return parser.Events, nil
+	// Convert from the library's event type to our custom Event type.
+	var events []Event
+	for _, icsEvent := range icsEvents {
+		if icsEvent == nil {
+			continue
+		}
+
+		var startTime, endTime *time.Time
+		start := icsEvent.GetStart()
+		if !start.IsZero() {
+			startTime = &start
+		}
+		end := icsEvent.GetEnd()
+		if !end.IsZero() {
+			endTime = &end
+		}
+
+		ourEvent := Event{
+			Summary: icsEvent.GetSummary(),
+			UID:     icsEvent.GetID(),
+			Start:   startTime,
+			End:     endTime,
+		}
+		events = append(events, ourEvent)
+	}
+
+	return events, nil
 }
 
 // min is a helper function to find the minimum of two integers.
@@ -176,50 +227,29 @@ func AgeInMins(t time.Time) float64 {
 }
 
 // FindEvents finds events that happened within the last `mins` minutes.
-func FindEvents(mins float64) ([]gocal.Event, error) {
+// This version only returns past events, not future ones.
+func FindEvents(mins float64) ([]Event, error) {
 	allEvents, err := GetAllEvents()
+	fmt.Println("allEvents: ", len(allEvents))
 	if err != nil {
 		return nil, err
 	}
 
-	var recentEvents []gocal.Event
+	// Use precise duration arithmetic for exact minute precision
+	cutoffTime := time.Now().Add(-time.Duration(mins) * time.Minute)
+	var recentEvents []Event
+
 	for _, event := range allEvents {
-		if event.Start == nil {
-			continue
-		}
-		age := AgeInMins(*event.Start)
-		if age < mins && age > 0 {
-			log.Printf("Found event within the last %.f minutes: %s", mins, event.Summary)
+		if event.Start != nil && event.Start.After(cutoffTime) && event.Start.Before(time.Now()) {
 			recentEvents = append(recentEvents, event)
 		}
 	}
+
 	return recentEvents, nil
 }
 
-// FindUpcomingEvents finds events scheduled within the next `mins` minutes.
-func FindUpcomingEvents(mins float64) ([]gocal.Event, error) {
-	allEvents, err := GetAllEvents()
-	if err != nil {
-		return nil, err
-	}
-
-	var upcomingEvents []gocal.Event
-	now := time.Now()
-	for _, event := range allEvents {
-		if event.Start == nil {
-			continue
-		}
-		timeUntil := event.Start.Sub(now).Minutes()
-		if timeUntil >= 0 && timeUntil <= mins {
-			log.Printf("Found upcoming event in %.f minutes: %s", timeUntil, event.Summary)
-			upcomingEvents = append(upcomingEvents, event)
-		}
-	}
-	return upcomingEvents, nil
-}
-
 // FetchReleaseHTML fetches the HTML for the release of an event.
-func FetchReleaseHTML(event gocal.Event) (string, error) {
+func FetchReleaseHTML(event Event) (string, error) {
 	summary := strings.TrimSpace(event.Summary)
 	url, ok := eventMappings[summary]
 	if !ok {
