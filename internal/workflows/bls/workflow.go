@@ -162,7 +162,7 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, params WorkflowParams) ([]s
 		if twttxt != "" {
 			workflow.GetLogger(ctx).Info("Posting tweet for event", "event", event.Summary, "tweetLength", len(twttxt))
 
-			err = workflow.ExecuteActivity(ctx, PostTweetActivity, twttxt, params.TwitterAPIKey, params.TwitterAPISecret, params.TwitterAccessToken, params.TwitterAccessSecret, false).Get(ctx, nil)
+			err = workflow.ExecuteActivity(ctx, PostTweetActivity, twttxt, params.TwitterAPIKey, params.TwitterAPISecret, params.TwitterAccessToken, params.TwitterAccessSecret, params.TweetForReal).Get(ctx, nil)
 			if err != nil {
 				workflow.GetLogger(ctx).Error("Failed to post tweet for event", "event", event.Summary, "tweet", twttxt, "error", err)
 				continue

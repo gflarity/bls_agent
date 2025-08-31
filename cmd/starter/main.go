@@ -24,7 +24,7 @@ func main() {
 
 	// Create workflow parameters with credentials from environment
 	workflowParams := bls.WorkflowParams{
-		Mins: 7 * 1440.0, // 1440. = 24 hours in minutes
+		Mins: 3 * 1440.0, // 1440. = 24 hours in minutes
 		// OpenAI configuration
 		OpenAIAPIKey:  os.Getenv("OPENAI_API_KEY"),
 		OpenAIBaseURL: os.Getenv("OPENAI_BASE_URL"),
