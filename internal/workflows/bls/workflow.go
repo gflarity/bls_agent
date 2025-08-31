@@ -58,6 +58,11 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, params WorkflowParams) ([]s
 	// Note that we continue even if one event fails, because we want to post any tweets if possible
 	var twtsums []string
 	for i, event := range events {
+
+		// create a ticker for 5 seconds, so we don't post tweets to quickly, we'll
+		// wait below until the ticker is done
+		timer := workflow.NewTimer(ctx, 5*time.Second)
+
 		workflow.GetLogger(ctx).Info("Processing event", "index", i, "summary", event.Summary)
 
 		var html string
@@ -149,6 +154,9 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, params WorkflowParams) ([]s
 			}
 
 		}
+
+		// wait for the timer to finish so that we don't post tweets to quickly			// wait for the ticker to finish so that we don't post tweets to quickly
+		timer.Get(ctx, nil)
 
 		// Post the tweet for this specific event
 		if twttxt != "" {
