@@ -34,6 +34,9 @@ func main() {
 		TwitterAPISecret:    os.Getenv("X_API_SECRET"),
 		TwitterAccessToken:  os.Getenv("X_ACCESS_TOKEN"),
 		TwitterAccessSecret: os.Getenv("X_ACCESS_TOKEN_SECRET"),
+
+		// Tweet For Real
+		TweetForReal: os.Getenv("TWEET_FOR_REAL") == "true",
 	}
 
 	// Validate required environment variables

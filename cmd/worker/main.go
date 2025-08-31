@@ -52,6 +52,7 @@ func main() {
 	w.RegisterActivity(bls.FetchReleaseHTMLActivity)
 	w.RegisterActivity(bls.ExtractSummaryActivity)
 	w.RegisterActivity(bls.CompleteWithSchemaActivity)
+	w.RegisterActivity(bls.PostTweetActivity)
 
 	// Start worker
 	sigChan := make(chan os.Signal, 1)

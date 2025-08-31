@@ -171,7 +171,14 @@ func PostTweetThreadActivity(ctx context.Context, tweetTexts []string, twitterAP
 }
 
 // PostTweetActivity posts a single tweet to Twitter
-func PostTweetActivity(ctx context.Context, tweetText string, twitterAPIKey, twitterAPISecret, twitterAccessToken, twitterAccessSecret string) error {
+func PostTweetActivity(ctx context.Context, tweetText string, twitterAPIKey, twitterAPISecret, twitterAccessToken, twitterAccessSecret string, forReal bool) error {
+
+	if !forReal {
+		activity.GetLogger(ctx).Info("PostTweetActivity completed successfully (but not for real)",
+			"tweetPosted", tweetText)
+		return nil
+	}
+
 	// Get activity info
 	activityInfo := activity.GetInfo(ctx)
 	workflowID := activityInfo.WorkflowExecution.ID

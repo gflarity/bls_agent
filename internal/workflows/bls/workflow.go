@@ -1,10 +1,12 @@
 package bls
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/gflarity/bls_agent/pkg/bls"
+	"github.com/gflarity/bls_agent/pkg/llm"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -20,6 +22,9 @@ type WorkflowParams struct {
 	TwitterAPISecret    string `json:"twitter_api_secret"`
 	TwitterAccessToken  string `json:"twitter_access_token"`
 	TwitterAccessSecret string `json:"twitter_access_token_secret"`
+
+	// Tweet For Real
+	TweetForReal bool `json:"tweet_for_real"`
 }
 
 // TweetResponse represents the expected response from the LLM
@@ -75,12 +80,25 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, params WorkflowParams) ([]s
 		prompt := fmt.Sprintf("Create a concise tweet summarizing this BLS release: %s\n\nContent: %s\n\nCreate a single engaging tweet under 280 characters focusing on the most important economic insights and data points.", event.Summary, txtsum)
 
 		// Temporarily use a hardcoded schema string for testing
-		schemaStr := `{"type":"object","properties":{"tweet":{"type":"string","description":"A single tweet summarizing the BLS release","minLength":1,"maxLength":280}},"required":["tweet"]}`
+		twtstruct := TweetResponse{}
+		schema, err := llm.GenerateSchemaFromType(twtstruct)
+		if err != nil {
+			workflow.GetLogger(ctx).Error("Failed to generate schema from type", "error", err)
+			continue
+		}
 
-		// Log the hardcoded schema for debugging
-		workflow.GetLogger(ctx).Info("Using hardcoded schema string",
-			"schemaStr", schemaStr,
-			"schemaStrType", fmt.Sprintf("%T", schemaStr))
+		// Pretty print the generated schema
+		schemaBytes, err := json.MarshalIndent(schema, "", "  ")
+		if err != nil {
+			workflow.GetLogger(ctx).Error("Failed to marshal schema", "error", err)
+			continue
+		}
+
+		// Marshal the schema map to a JSON string for CompleteWithSchema
+		schemaStr := string(schemaBytes)
+		workflow.GetLogger(ctx).Info("Generated Schema: %s", schemaStr)
+
+		//schemaStr := `{"type":"object","properties":{"tweet":{"type":"string","description":"A single tweet summarizing the BLS release","minLength":1,"maxLength":280}},"required":["tweet"]}`
 
 		// Get LLM configuration from workflow params
 		apiKey := params.OpenAIAPIKey
@@ -90,6 +108,7 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, params WorkflowParams) ([]s
 		sysprom := "You are an expert economic analyst who creates engaging single tweets about BLS (Bureau of Labor Statistics) releases. Your responses must follow the exact JSON schema provided."
 
 		// Final validation of all parameters before activity call
+		var resp string
 		workflow.GetLogger(ctx).Debug("Final parameters for CompleteWithSchemaActivity",
 			"baseURL", baseURL,
 			"schemaStr", schemaStr,
@@ -104,59 +123,50 @@ func BLSReleaseSummaryWorkflow(ctx workflow.Context, params WorkflowParams) ([]s
 			"promptType", fmt.Sprintf("%T", prompt),
 			"modelType", fmt.Sprintf("%T", model))
 
-		var twtsum string
-		err = workflow.ExecuteActivity(ctx, CompleteWithSchemaActivity, apiKey, baseURL, schemaStr, sysprom, prompt, model).Get(ctx, &twtsum)
+		err = workflow.ExecuteActivity(ctx, CompleteWithSchemaActivity, apiKey, baseURL, schemaStr, sysprom, prompt, model).Get(ctx, &resp)
+		// unmarshal the response into the twtstruct
+		err = json.Unmarshal([]byte(resp), &twtstruct)
 		if err != nil {
-			workflow.GetLogger(ctx).Error("Failed to create Twitter summary with LLM for event", "event", event.Summary, "error", err)
+			workflow.GetLogger(ctx).Error("Failed to unmarshal response into twtstruct", "error", err)
+			workflow.GetLogger(ctx).Error("response", "response", resp)
 			continue
+		}
+
+		// Process the LLM response for this event
+		var twttxt string
+		if resp != "" {
+			err = json.Unmarshal([]byte(resp), &twtstruct)
+			if err != nil {
+				workflow.GetLogger(ctx).Error("Failed to unmarshal response into twtstruct", "error", err)
+				continue
+			}
+			twttxt = twtstruct.Tweet
+
+			// Validate tweet length
+			if len(twttxt) > 280 {
+				workflow.GetLogger(ctx).Error("LLM generated tweet is too long: %d characters (max 280)", twttxt)
+				continue
+			}
 
 		}
-		twtsums = append(twtsums, twtsum)
 
-		/*
-			// Process the LLM response for this event
-			var tweetText string
-			if twitterSummary != "" {
-				// Parse the JSON response from LLM using the struct
-				var response TweetResponse
+		// Post the tweet for this specific event
+		if twttxt != "" {
+			workflow.GetLogger(ctx).Info("Posting tweet for event", "event", event.Summary, "tweetLength", len(twttxt))
 
-				err = json.Unmarshal([]byte(twitterSummary), &response)
-				if err != nil {
-					return "", fmt.Errorf("failed to parse LLM response as JSON: %w", err)
-				}
-
-				// Validate tweet length
-				if len(response.Tweet) > 280 {
-					return "", fmt.Errorf("LLM generated tweet is too long: %d characters (max 280)", len(response.Tweet))
-				}
-
-				tweetText = response.Tweet
-			}
-
-			// Post the tweet for this specific event
-			if tweetText != "" {
-				workflow.GetLogger(ctx).Info("Posting tweet for event", "event", event.Summary, "tweetLength", len(tweetText))
-
-				err = workflow.ExecuteActivity(ctx, PostTweetActivity, tweetText, params.TwitterAPIKey, params.TwitterAPISecret, params.TwitterAccessToken, params.TwitterAccessSecret).Get(ctx, nil)
-				if err != nil {
-					workflow.GetLogger(ctx).Error("Failed to post tweet for event", "event", event.Summary, "tweet", tweetText, "error", err)
-					// Continue with other events even if tweeting fails
-				} else {
-					workflow.GetLogger(ctx).Info("Successfully posted tweet for event", "event", event.Summary, "tweet", tweetText[:min(len(tweetText), 50)])
-				}
+			err = workflow.ExecuteActivity(ctx, PostTweetActivity, twttxt, params.TwitterAPIKey, params.TwitterAPISecret, params.TwitterAccessToken, params.TwitterAccessSecret, false).Get(ctx, nil)
+			if err != nil {
+				workflow.GetLogger(ctx).Error("Failed to post tweet for event", "event", event.Summary, "tweet", twttxt, "error", err)
+				continue
 			} else {
-				workflow.GetLogger(ctx).Warn("No valid tweet generated for event", "event", event.Summary)
+				workflow.GetLogger(ctx).Info("Successfully posted tweet for event", "event", event.Summary, "tweet", twttxt[:min(len(twttxt), 50)])
+				twtsums = append(twtsums, twttxt)
 			}
-
-		*/
+		} else {
+			workflow.GetLogger(ctx).Error("No valid tweet generated for event", "event", event.Summary)
+			continue
+		}
 	}
-
-	// Combine all summaries
-	finalSummary := fmt.Sprintf("BLS Release Summary (%d events processed):\n\n", len(twtsums))
-	for i, summary := range twtsums {
-		finalSummary += fmt.Sprintf("--- Event %d ---\n%s\n\n", i+1, summary)
-	}
-
 	return twtsums, nil
 }
 
