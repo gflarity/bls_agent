@@ -11,6 +11,8 @@ require (
 	github.com/g8rswimmer/go-twitter/v2 v2.1.5
 	github.com/invopop/jsonschema v0.13.0
 	github.com/joho/godotenv v1.5.1
+	github.com/jtracks/go-arciv v0.0.1
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/openai/openai-go/v2 v2.0.2
 	go.temporal.io/sdk v1.34.0
 )

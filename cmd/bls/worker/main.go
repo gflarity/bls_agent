@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/gflarity/bls_agent/internal/config"
 	"github.com/gflarity/bls_agent/internal/workflows/bls"
 
 	"go.temporal.io/sdk/client"
@@ -17,8 +16,6 @@ import (
 )
 
 func main() {
-	// Load configuration
-	cfg := config.Load()
 
 	// Configure logger to suppress debug logs
 	// Create an slog logger with INFO level and above (suppresses DEBUG)
@@ -32,8 +29,8 @@ func main() {
 
 	// Create Temporal client with custom logger
 	c, err := client.Dial(client.Options{
-		HostPort:  cfg.TemporalHostPort,
-		Namespace: cfg.TemporalNamespace,
+		HostPort:  os.Getenv("TEMPORAL_HOST_PORT"),
+		Namespace: os.Getenv("TEMPORAL_NAMESPACE"),
 		Logger:    temporalLogger,
 	})
 	if err != nil {
@@ -42,7 +39,7 @@ func main() {
 	defer c.Close()
 
 	// Create worker
-	w := worker.New(c, cfg.TaskQueue, worker.Options{})
+	w := worker.New(c, os.Getenv("TEMPORAL_TASK_QUEUE"), worker.Options{})
 
 	// Register workflows
 	w.RegisterWorkflow(bls.BLSReleaseSummaryWorkflow)

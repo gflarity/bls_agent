@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/gflarity/bls_agent/internal/config"
 	"github.com/gflarity/bls_agent/internal/workflows/bls"
 	"github.com/joho/godotenv"
 	"go.temporal.io/sdk/client"
@@ -19,12 +18,9 @@ func main() {
 		// Continue execution as environment variables might be set elsewhere
 	}
 
-	// Load configuration
-	cfg := config.Load()
-
 	// Create workflow parameters with credentials from environment
 	workflowParams := bls.WorkflowParams{
-		Mins: 3 * 1440.0, // 1440. = 24 hours in minutes
+		Mins: 5, //
 		// OpenAI configuration
 		OpenAIAPIKey:  os.Getenv("OPENAI_API_KEY"),
 		OpenAIBaseURL: os.Getenv("OPENAI_BASE_URL"),
@@ -50,36 +46,42 @@ func main() {
 
 	// Create Temporal client
 	c, err := client.Dial(client.Options{
-		HostPort:  cfg.TemporalHostPort,
-		Namespace: cfg.TemporalNamespace,
+		HostPort:  os.Getenv("TEMPORAL_HOST_PORT"),
+		Namespace: os.Getenv("TEMPORAL_NAMESPACE"),
 	})
 	if err != nil {
 		log.Fatalln("Unable to create Temporal client", err)
 	}
 	defer c.Close()
 
-	// Create workflow options
-	workflowOptions := client.StartWorkflowOptions{
-		ID:        "bls-release-summary-" + time.Now().Format("20060102-150405"),
-		TaskQueue: cfg.TaskQueue,
-	}
+	// Create schedule ID with timestamp to make it unique
+	scheduleID := "bls-release-summary-cron-" + time.Now().Format("20060102-150405")
 
-	// Start the BLS Release Summary workflow
-	log.Println("Starting BLSReleaseSummaryWorkflow...")
-	we, err := c.ExecuteWorkflow(context.Background(), workflowOptions, bls.BLSReleaseSummaryWorkflow, workflowParams)
+	// Create the schedule for daily execution at 8:30am and 10:00am Eastern Time
+	log.Println("Creating BLS Release Summary cron schedule...")
+	_, err = c.ScheduleClient().Create(context.Background(), client.ScheduleOptions{
+		ID: scheduleID,
+		Spec: client.ScheduleSpec{
+			// Cron expressions for 8:30am and 10:00am
+			CronExpressions: []string{
+				"32 8 * * *", // 8:30 AM
+				"2 10 * * *", // 10:00 AM
+			},
+			// Use Eastern Time zone to handle DST automatically
+			TimeZoneName: "America/New_York",
+		},
+		Action: &client.ScheduleWorkflowAction{
+			ID:        "bls-release-summary-scheduled",
+			TaskQueue: os.Getenv("TEMPORAL_TASK_QUEUE"),
+			Workflow:  bls.BLSReleaseSummaryWorkflow,
+			Args:      []interface{}{workflowParams},
+		},
+	})
 	if err != nil {
-		log.Fatalln("Unable to execute BLSReleaseSummaryWorkflow", err)
+		log.Fatalln("Unable to create schedule", err)
 	}
 
-	log.Printf("Started BLSReleaseSummaryWorkflow: %s, RunID: %s\n", we.GetID(), we.GetRunID())
-
-	// Wait for workflow completion
-	var twtsums []string
-	err = we.Get(context.Background(), &twtsums)
-	if err != nil {
-		log.Fatalln("BLSReleaseSummaryWorkflow execution failed", err)
-	}
-
-	log.Printf("BLSReleaseSummaryWorkflow completed successfully. Result: %v\n", twtsums)
-	log.Println("BLS Release Summary workflow completed!")
+	log.Printf("Successfully created BLS Release Summary cron schedule: %s\n", scheduleID)
+	log.Println("The workflow will run daily at 8:30 AM and 10:00 AM Eastern Time")
+	log.Println("Schedule created successfully!")
 }

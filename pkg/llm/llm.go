@@ -138,3 +138,18 @@ func GenerateSchemaFromType(schemaType interface{}) (map[string]interface{}, err
 
 	return schemaMap, nil
 }
+
+func GenerateSchema(schemaType interface{}) (string, error) {
+	schema, err := GenerateSchemaFromType(schemaType)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate schema from type: %w", err)
+	}
+	// Pretty print the generated schema
+	schemaBytes, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal schema: %w", err)
+	}
+
+	// Marshal the schema map to a JSON string for CompleteWithSchema
+	return string(schemaBytes), nil
+}
